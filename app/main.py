@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Response
+from starlette.routing import NoMatchFound
 
 from . import database
 from .analyzer import CompatibilityError, analyze_compatibility
@@ -39,6 +40,19 @@ from .schemas import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Make the batch profile processor part of the startup contract: resolve its
+    # route from the running app before serving traffic. If the handler were ever
+    # not wired into the production app this fails loudly at boot instead of
+    # surfacing as a 404 on the first POST /api/v1/messages/profile request.
+    try:
+        profile_path = app.url_path_for("messages_profile")
+    except NoMatchFound:
+        profile_path = None
+    if profile_path != "/api/v1/messages/profile":
+        raise RuntimeError(
+            "batch profile route POST /api/v1/messages/profile is not registered "
+            f"(resolved as {profile_path!r}); the profiler must load with the app"
+        )
     database.init_db()
     yield
 
@@ -380,7 +394,7 @@ def detect(req: DetectRequest):
     )
 
 
-@app.post("/api/v1/messages/profile")
+@app.post("/api/v1/messages/profile", name="messages_profile")
 def messages_profile(req: MessageProfileRequest):
     """Parse 1-500 hex samples and return a statistical field profile grouped
     by message version.

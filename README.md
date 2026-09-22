@@ -772,6 +772,28 @@ curl -X POST http://localhost:8000/api/v1/messages/profile \
 
 > 设备类型下没有任何注册版本（含停用）时返回 `404`；`samples` 为空、超过 500 条或含未知字段返回 `422`。hex 清洗规则与其他接口一致（忽略空白、`_`、`-` 与 `0x` 前缀）。
 
+**启动后可访问性自检**：该批量画像处理器随正式应用一起加载（与 `/parse`、`/detect` 同一 `app`，在容器启动时通过生命周期自检校验其路由已注册，缺失会让服务**启动即失败**而非返回 404）。`docker compose up --build` 之后可按下述方式确认路由在线：
+
+```bash
+# 1) 路由存在：对不存在的设备类型返回的是应用层 404（detail 提示无定义），
+#    而非框架级 "Not Found"——说明路由本身已挂载
+curl -i -X POST http://localhost:8000/api/v1/messages/profile \
+  -H 'Content-Type: application/json' \
+  -d '{"device_type":"__health_probe__","samples":[{"hex":"00"}]}'
+# 期望：HTTP/1.1 404，body 为 {"detail":"no definitions found for device type '__health_probe__'"}
+
+# 2) 空 samples 触发请求体校验，返回 422（同样证明路由可达；若路由未挂载才会是 404 空 body）
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/v1/messages/profile \
+  -H 'Content-Type: application/json' -d '{"device_type":"x","samples":[]}'
+# 期望：422
+
+# 3) 也可在交互式文档中确认：http://localhost:8000/docs 下可见
+#    POST /api/v1/messages/profile，或在 openapi.json 中检索该路径
+curl -s http://localhost:8000/openapi.json | grep -o '/api/v1/messages/profile'
+```
+
+> 注意区分两种 404：**应用层 404**（`detail` 为 `no definitions found ...`）表示路由可达、仅设备类型未注册，先用 `POST /api/v1/definitions` 注册定义即可；而 body 为 `{"detail":"Not Found"}` 的 404 才表示路由未随应用加载——现行镜像已通过启动自检排除该情况。
+
 ## 本地开发（不用 Docker）
 
 ```bash
