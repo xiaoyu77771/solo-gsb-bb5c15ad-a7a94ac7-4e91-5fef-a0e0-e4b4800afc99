@@ -37,9 +37,33 @@ from .schemas import (
 )
 
 
+# Route served by the batch profiling processor (app/profiler.py). It is
+# registered as an ordinary @app.post below; ``_ensure_profiler_route`` runs at
+# application startup so that, if the handler is ever not wired onto the app,
+# the service fails loudly at boot instead of answering a silent 404 after
+# startup.
+BATCH_PROFILE_ROUTE = ("POST", "/api/v1/messages/profile")
+
+
+def _ensure_profiler_route() -> None:
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path == BATCH_PROFILE_ROUTE[1] and methods and BATCH_PROFILE_ROUTE[0] in methods:
+            return
+    raise RuntimeError(
+        f"batch profiler route {BATCH_PROFILE_ROUTE[0]} {BATCH_PROFILE_ROUTE[1]} "
+        "is not registered: the batch profiling processor did not load with the "
+        "application"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.init_db()
+    # Confirm the batch profiling handler shipped with the running app before
+    # the service starts accepting traffic.
+    _ensure_profiler_route()
     yield
 
 

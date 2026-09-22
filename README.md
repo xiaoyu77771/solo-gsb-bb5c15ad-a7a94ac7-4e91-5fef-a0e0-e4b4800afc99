@@ -772,6 +772,34 @@ curl -X POST http://localhost:8000/api/v1/messages/profile \
 
 > 设备类型下没有任何注册版本（含停用）时返回 `404`；`samples` 为空、超过 500 条或含未知字段返回 `422`。hex 清洗规则与其他接口一致（忽略空白、`_`、`-` 与 `0x` 前缀）。
 
+**启动后可访问性**
+
+该路由与其他路由同在 `app/main.py` 中以 `@app.post` 注册，并由 `app/profiler.py` 的批量画像处理器提供实现，随 `uvicorn app.main:app`（即 `docker compose up --build`）的应用模块导入一并加载，**无需额外开关或步骤**。服务启动时（lifespan）会断言该路由已挂到应用上——若处理器未随应用加载，容器会在启动阶段直接报错退出，而不是在启动后对该路径返回静默 `404`。
+
+启动后可用以下方式确认路由在线（在容器/服务所在主机执行）：
+
+```bash
+# 1) 健康检查，确认应用已完成启动
+curl http://localhost:8000/health
+# -> {"status":"ok"}
+
+# 2) 路由已随应用加载（出现在 OpenAPI 路径列表中）
+curl http://localhost:8000/openapi.json | python3 -c \
+  "import json,sys; print('/api/v1/messages/profile' in json.load(sys.stdin)['paths'])"
+# -> True
+
+# 3) 对一个尚未注册任何版本的设备类型 POST，路由命中处理器并返回业务 404
+#    （"no definitions found ..."），而非路由层面的 {"detail":"Not Found"}，
+#    以此区分“路由未注册”与“该设备暂无定义”
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  http://localhost:8000/api/v1/messages/profile \
+  -H 'Content-Type: application/json' \
+  -d '{"device_type":"nonexistent","samples":[{"hex":"aa"}]}'
+# -> 404（业务响应，detail 提示该设备无定义；先注册定义再提交样本即返回 200 画像）
+```
+
+> 注意区分两种 `404`：路径完全未注册时 FastAPI 返回 `{"detail":"Not Found"}`；本路由在线但 `device_type` 下没有任何已注册版本（含停用）时返回 `{"detail":"no definitions found for device type '...'"}`。正常使用流程是先 `POST /api/v1/definitions` 注册至少一个版本，再批量提交样本，此时返回 `200`。
+
 ## 本地开发（不用 Docker）
 
 ```bash
